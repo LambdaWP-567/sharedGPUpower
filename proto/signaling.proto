@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package sharedgpu.signaling.v1;
+
+option go_package = "github.com/lambdawp-567/sharedgpupower/backend/internal/grpc/pb";
+
+service SignalingService {
+  rpc Exchange(stream ICESignal) returns (stream ICESignal);
+}
+
+message ICESignal {
+  string from_agent_id = 1;
+  string to_agent_id = 2;
+  string job_id = 3;
+  string type = 4;
+  bytes payload = 5;
+}

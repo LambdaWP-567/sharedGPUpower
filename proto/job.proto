@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+package sharedgpu.job.v1;
+
+option go_package = "github.com/lambdawp-567/sharedgpupower/backend/internal/grpc/pb";
+
+import "google/protobuf/timestamp.proto";
+
+message JobRequest {
+  string submitter_agent_id = 1;
+  string type = 2;
+  LLMInferencePayload llm = 3;
+  bool async = 4;
+}
+
+message LLMInferencePayload {
+  string model = 1;
+  string prompt = 2;
+  int32 max_tokens = 3;
+  float temperature = 4;
+  int32 required_gpu_layers = 5;
+}
+
+message JobHandle {
+  string job_id = 1;
+  google.protobuf.Timestamp created_at = 2;
+}
+
+message JobStatus {
+  string job_id = 1;
+  string status = 2;
+  string assigned_agent_id = 3;
+  bytes result = 4;
+  string error = 5;
+  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp completed_at = 7;
+  float token_cost = 8;
+}

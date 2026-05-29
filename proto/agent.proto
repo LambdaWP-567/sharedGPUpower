@@ -1,0 +1,86 @@
+syntax = "proto3";
+
+package sharedgpu.agent.v1;
+
+option go_package = "github.com/lambdawp-567/sharedgpupower/backend/internal/grpc/pb";
+
+import "google/protobuf/timestamp.proto";
+
+service AgentService {
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+  rpc StreamJobs(StreamJobsRequest) returns (stream JobPayload);
+  rpc ReportResult(JobResult) returns (Ack);
+}
+
+message RegisterRequest {
+  string name = 1;
+  string public_key = 2;
+  HardwareInfo hardware = 3;
+  ResourceLimits limits = 4;
+  BenchmarkResult benchmark = 5;
+}
+
+message RegisterResponse {
+  string agent_id = 1;
+  string token = 2;
+}
+
+message HardwareInfo {
+  int32 cpu_cores = 1;
+  float ram_gb = 2;
+  string gpu_model = 3;
+  int32 gpu_layers_total = 4;
+  string arch = 5;
+  string os = 6;
+}
+
+message ResourceLimits {
+  float cpu_percent = 1;
+  float ram_percent = 2;
+  int32 gpu_layers = 3;
+}
+
+message BenchmarkResult {
+  float cpu_score = 1;
+  float mem_bandwidth_gbps = 2;
+  float gpu_tflops = 3;
+  float composite_score = 4;
+}
+
+message HeartbeatRequest {
+  string agent_id = 1;
+  float cpu_usage = 2;
+  float ram_usage = 3;
+  int32 active_jobs = 4;
+  float token_balance = 5;
+}
+
+message HeartbeatResponse {
+  bool ok = 1;
+}
+
+message StreamJobsRequest {
+  string agent_id = 1;
+}
+
+message JobPayload {
+  string job_id = 1;
+  string type = 2;
+  bytes payload = 3;
+  string signature = 4;
+  google.protobuf.Timestamp deadline = 5;
+}
+
+message JobResult {
+  string job_id = 1;
+  string agent_id = 2;
+  bool success = 3;
+  bytes result = 4;
+  string error = 5;
+  float duration_seconds = 6;
+}
+
+message Ack {
+  bool ok = 1;
+}
