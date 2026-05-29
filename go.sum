@@ -1,0 +1,3 @@
+module github.com/lambdawp-567/sharedgpupower/agent
+
+go 1.24.7
