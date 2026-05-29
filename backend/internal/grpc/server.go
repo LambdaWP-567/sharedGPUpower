@@ -3,11 +3,14 @@ package grpcserver
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"time"
 
 	pb "github.com/lambdawp-567/sharedgpupower/backend/internal/grpc/pb"
+	"github.com/lambdawp-567/sharedgpupower/backend/internal/auth"
 	"github.com/lambdawp-567/sharedgpupower/backend/internal/registry"
 	"github.com/lambdawp-567/sharedgpupower/backend/internal/scheduler"
+	"github.com/lambdawp-567/sharedgpupower/backend/internal/users"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -15,18 +18,48 @@ import (
 
 type AgentServer struct {
 	pb.UnimplementedAgentServiceServer
-	reg   *registry.Registry
-	sched *scheduler.Scheduler
-	log   *zap.Logger
+	reg          *registry.Registry
+	sched        *scheduler.Scheduler
+	userStore    *users.Store
+	stepca       *auth.StepCAClient
+	log          *zap.Logger
+	streamsMu    sync.Mutex
+	activeStreams map[string]struct{}
 }
 
-func NewAgentServer(reg *registry.Registry, sched *scheduler.Scheduler, log *zap.Logger) *AgentServer {
-	return &AgentServer{reg: reg, sched: sched, log: log}
+func NewAgentServer(
+	reg *registry.Registry,
+	sched *scheduler.Scheduler,
+	userStore *users.Store,
+	stepca *auth.StepCAClient,
+	log *zap.Logger,
+) *AgentServer {
+	return &AgentServer{
+		reg:          reg,
+		sched:        sched,
+		userStore:    userStore,
+		stepca:       stepca,
+		log:          log,
+		activeStreams: make(map[string]struct{}),
+	}
 }
 
 func (s *AgentServer) Register(ctx context.Context, req *pb.RegisterRequest) (*pb.RegisterResponse, error) {
 	if req.Name == "" {
 		return nil, status.Error(codes.InvalidArgument, "name required")
+	}
+
+	// Validate API key and get user
+	var userID string
+	if req.UserApiKey != "" && s.userStore != nil {
+		u, err := s.userStore.GetByAPIKey(ctx, req.UserApiKey)
+		if err != nil {
+			return nil, status.Error(codes.Unauthenticated, "invalid api key")
+		}
+		if u.Status == "disabled" {
+			return nil, status.Error(codes.PermissionDenied, "account disabled")
+		}
+		userID = u.ID
 	}
 
 	benchScore := 1.0
@@ -38,6 +71,8 @@ func (s *AgentServer) Register(ctx context.Context, req *pb.RegisterRequest) (*p
 		Name:           req.Name,
 		PublicKey:      req.PublicKey,
 		BenchScore:     benchScore,
+		UserID:         userID,
+		ApprovalStatus: "pending",
 	}
 	if req.Hardware != nil {
 		a.Arch = req.Hardware.Arch
@@ -59,8 +94,25 @@ func (s *AgentServer) Register(ctx context.Context, req *pb.RegisterRequest) (*p
 		return nil, status.Errorf(codes.Internal, "register: %v", err)
 	}
 
-	s.log.Info("agent registered", zap.String("id", id), zap.String("name", req.Name))
-	return &pb.RegisterResponse{AgentId: id, Token: id}, nil
+	resp := &pb.RegisterResponse{AgentId: id, Token: id}
+
+	// Issue mTLS cert if CSR provided and step-ca is configured
+	if len(req.CsrPem) > 0 && s.stepca != nil {
+		certPEM, caCertPEM, err := s.stepca.RequestCert(ctx, req.CsrPem, id)
+		if err != nil {
+			s.log.Warn("step-ca cert request failed (agent proceeds without mTLS)", zap.Error(err))
+		} else {
+			resp.CertPem = certPEM
+			resp.CaCertPem = caCertPEM
+		}
+	}
+
+	s.log.Info("agent registered",
+		zap.String("id", id),
+		zap.String("name", req.Name),
+		zap.String("user_id", userID),
+	)
+	return resp, nil
 }
 
 func (s *AgentServer) Heartbeat(ctx context.Context, req *pb.HeartbeatRequest) (*pb.HeartbeatResponse, error) {
@@ -75,7 +127,27 @@ func (s *AgentServer) StreamJobs(req *pb.StreamJobsRequest, stream pb.AgentServi
 	if !ok {
 		return status.Errorf(codes.NotFound, "agent not found: %s", req.AgentId)
 	}
-	defer s.reg.SetOffline(req.AgentId)
+
+	// Gate on approval status
+	if agent.ApprovalStatus != "active" {
+		return status.Errorf(codes.PermissionDenied, "agent pending approval")
+	}
+
+	// Prevent duplicate streams for the same agent.
+	s.streamsMu.Lock()
+	if _, active := s.activeStreams[req.AgentId]; active {
+		s.streamsMu.Unlock()
+		return status.Errorf(codes.AlreadyExists, "stream already active for agent %s", req.AgentId)
+	}
+	s.activeStreams[req.AgentId] = struct{}{}
+	s.streamsMu.Unlock()
+
+	defer func() {
+		s.streamsMu.Lock()
+		delete(s.activeStreams, req.AgentId)
+		s.streamsMu.Unlock()
+		s.reg.SetOffline(req.AgentId)
+	}()
 
 	s.log.Info("agent streaming jobs", zap.String("agent_id", req.AgentId))
 
@@ -87,12 +159,9 @@ func (s *AgentServer) StreamJobs(req *pb.StreamJobsRequest, stream pb.AgentServi
 			if !ok {
 				return nil
 			}
-			jobPayload := &pb.JobPayload{
-				Payload: payload,
-			}
-			// Extract job_id from payload if present
+			jobPayload := &pb.JobPayload{Payload: payload}
 			var m map[string]any
-			if json.Unmarshal(payload, &m) == nil {
+			if err := json.Unmarshal(payload, &m); err == nil {
 				if jid, ok := m["job_id"].(string); ok {
 					jobPayload.JobId = jid
 				}
@@ -118,8 +187,9 @@ func (s *AgentServer) ReportResult(ctx context.Context, req *pb.JobResult) (*pb.
 			s.log.Error("complete job failed", zap.Error(err))
 		}
 	} else {
-		// Store result in jobs table
-		_ = req.Error
+		if err := s.sched.FailJob(ctx, req.JobId, req.Error); err != nil {
+			s.log.Error("fail job update failed", zap.Error(err))
+		}
 	}
 
 	s.log.Info("job result received",
@@ -132,6 +202,7 @@ func (s *AgentServer) ReportResult(ctx context.Context, req *pb.JobResult) (*pb.
 
 type SignalingServer struct {
 	pb.UnimplementedSignalingServiceServer
+	mu       sync.RWMutex
 	sessions map[string]chan *pb.ICESignal
 	log      *zap.Logger
 }
@@ -143,10 +214,16 @@ func NewSignalingServer(log *zap.Logger) *SignalingServer {
 	}
 }
 
+func (s *SignalingServer) getSession(key string) (chan *pb.ICESignal, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	ch, ok := s.sessions[key]
+	return ch, ok
+}
+
 func (s *SignalingServer) Exchange(stream pb.SignalingService_ExchangeServer) error {
 	ctx := stream.Context()
 
-	// First message identifies the sender
 	first, err := stream.Recv()
 	if err != nil {
 		return err
@@ -154,10 +231,17 @@ func (s *SignalingServer) Exchange(stream pb.SignalingService_ExchangeServer) er
 
 	sessionKey := first.FromAgentId + ":" + first.JobId
 	ch := make(chan *pb.ICESignal, 16)
-	s.sessions[sessionKey] = ch
-	defer delete(s.sessions, sessionKey)
 
-	// Forward received signals to target
+	s.mu.Lock()
+	s.sessions[sessionKey] = ch
+	s.mu.Unlock()
+
+	defer func() {
+		s.mu.Lock()
+		delete(s.sessions, sessionKey)
+		s.mu.Unlock()
+	}()
+
 	go func() {
 		for {
 			msg, err := stream.Recv()
@@ -165,7 +249,7 @@ func (s *SignalingServer) Exchange(stream pb.SignalingService_ExchangeServer) er
 				return
 			}
 			targetKey := msg.ToAgentId + ":" + msg.JobId
-			if targetCh, ok := s.sessions[targetKey]; ok {
+			if targetCh, ok := s.getSession(targetKey); ok {
 				select {
 				case targetCh <- msg:
 				case <-ctx.Done():
@@ -177,7 +261,6 @@ func (s *SignalingServer) Exchange(stream pb.SignalingService_ExchangeServer) er
 		}
 	}()
 
-	// Forward initial signal
 	if err := stream.Send(first); err != nil {
 		return err
 	}

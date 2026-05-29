@@ -47,6 +47,17 @@ func (l *Ledger) HasSufficientBalance(ctx context.Context, agentID string, cost 
 	return bal >= cost, nil
 }
 
+// UserBalance returns the sum of token deltas for all agents belonging to a user.
+func (l *Ledger) UserBalance(ctx context.Context, userID string) (float64, error) {
+	var bal float64
+	err := l.db.QueryRow(ctx, `
+		SELECT COALESCE(SUM(tl.delta), 0)
+		FROM token_ledger tl
+		JOIN agents a ON a.id = tl.agent_id
+		WHERE a.user_id = $1`, userID).Scan(&bal)
+	return bal, err
+}
+
 // CalcCost computes token cost: benchScore × durationMinutes × resourceFraction.
 func CalcCost(benchScore, durationMinutes, resourceFraction float64) float64 {
 	return benchScore * durationMinutes * resourceFraction

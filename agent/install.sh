@@ -35,6 +35,11 @@ echo "Downloading agent from $DOWNLOAD_URL ..."
 curl -fsSL "$DOWNLOAD_URL" -o "$BINARY"
 chmod +x "$BINARY"
 
+# Prompt for API key
+echo ""
+echo "Enter your API key from the dashboard (sgpu_...) — press Enter to skip:"
+read -r API_KEY
+
 # Create default config if not present
 if [ ! -f "$CONFIG_DIR/agent.yaml" ]; then
   echo "Creating default config at $CONFIG_DIR/agent.yaml ..."
@@ -54,9 +59,32 @@ ollama:
 
 agent:
   name: "$(hostname)"
+
+auth:
+  user_api_key: "${API_KEY}"
+  cert_path: "$CONFIG_DIR/agent.crt"
+  key_path: "$CONFIG_DIR/agent.key"
+  ca_cert_path: "$CONFIG_DIR/ca.crt"
 EOF
   echo ""
-  echo "IMPORTANT: Edit $CONFIG_DIR/agent.yaml and set your backend endpoint before starting."
+  echo "Config written to $CONFIG_DIR/agent.yaml"
+else
+  # Update API key in existing config if provided
+  if [ -n "$API_KEY" ]; then
+    if grep -q "user_api_key:" "$CONFIG_DIR/agent.yaml"; then
+      sed -i "s|user_api_key:.*|user_api_key: \"$API_KEY\"|" "$CONFIG_DIR/agent.yaml"
+    else
+      cat >> "$CONFIG_DIR/agent.yaml" <<EOF
+
+auth:
+  user_api_key: "${API_KEY}"
+  cert_path: "$CONFIG_DIR/agent.crt"
+  key_path: "$CONFIG_DIR/agent.key"
+  ca_cert_path: "$CONFIG_DIR/ca.crt"
+EOF
+    fi
+    echo "API key saved to config."
+  fi
 fi
 
 # Install as macOS LaunchAgent

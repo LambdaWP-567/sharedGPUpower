@@ -20,6 +20,11 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	maxConcurrentJobs = 4
+	jobTimeout        = 10 * time.Minute
+)
+
 func main() {
 	cfgPath := flag.String("config", "agent.yaml", "path to config file")
 	flag.Parse()
@@ -65,7 +70,6 @@ func main() {
 		zap.Float32("composite", bench.CompositeScore),
 	)
 
-	// Connect to backend
 	client, err := registry.New(cfg, bench, log)
 	if err != nil {
 		log.Fatal("grpc connect failed", zap.Error(err))
@@ -78,13 +82,10 @@ func main() {
 	}
 	log.Info("agent registered", zap.String("id", agentID))
 
-	// Start heartbeat
 	go client.RunHeartbeat(ctx)
 
-	// Ollama client
 	ollamaClient := ollama.New(cfg.Ollama.Host, cfg.Resources.GPULayers)
 
-	// Ping Ollama
 	pingCtx, pingCancel := context.WithTimeout(ctx, 5*time.Second)
 	if err := ollamaClient.Ping(pingCtx); err != nil {
 		log.Warn("ollama not reachable (will retry per job)", zap.Error(err))
@@ -95,13 +96,15 @@ func main() {
 
 	exec := executor.New(ollamaClient, log)
 
-	// Stream and execute jobs
+	// Semaphore limits concurrent job goroutines.
+	sem := make(chan struct{}, maxConcurrentJobs)
+
 	go func() {
 		for {
 			if ctx.Err() != nil {
 				return
 			}
-			if err := runJobStream(ctx, client, exec, log); err != nil {
+			if err := runJobStream(ctx, client, exec, sem, log); err != nil {
 				if ctx.Err() != nil {
 					return
 				}
@@ -115,7 +118,7 @@ func main() {
 	fmt.Println("agent shutting down")
 }
 
-func runJobStream(ctx context.Context, client *registry.Client, exec *executor.Executor, log *zap.Logger) error {
+func runJobStream(ctx context.Context, client *registry.Client, exec *executor.Executor, sem chan struct{}, log *zap.Logger) error {
 	stream, err := client.StreamJobs(ctx)
 	if err != nil {
 		return err
@@ -128,21 +131,41 @@ func runJobStream(ctx context.Context, client *registry.Client, exec *executor.E
 			return err
 		}
 
+		// Acquire semaphore slot (blocks if maxConcurrentJobs reached).
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+
 		go func(job *pb.JobPayload) {
+			defer func() { <-sem }()
+
 			log.Info("executing job", zap.String("job_id", job.JobId), zap.String("type", job.Type))
+
+			// Per-job timeout so a hanging Ollama call doesn't leak forever.
+			jobCtx, jobCancel := context.WithTimeout(ctx, jobTimeout)
+			defer jobCancel()
+
 			start := time.Now()
 
-			// Merge job_id into payload if not present
 			var payloadMap map[string]any
-			if json.Unmarshal(job.Payload, &payloadMap) == nil {
+			if err := json.Unmarshal(job.Payload, &payloadMap); err == nil {
 				if _, ok := payloadMap["job_id"]; !ok {
 					payloadMap["job_id"] = job.JobId
 				}
-				job.Payload, _ = json.Marshal(payloadMap)
+				if updated, err := json.Marshal(payloadMap); err == nil {
+					job.Payload = updated
+				}
 			}
 
-			result := exec.Execute(ctx, job.JobId, job.Type, job.Payload)
+			result := exec.Execute(jobCtx, job.JobId, job.Type, job.Payload)
 			elapsed := time.Since(start).Seconds()
+
+			if jobCtx.Err() == context.DeadlineExceeded {
+				result.Success = false
+				result.Error = "job timeout exceeded"
+			}
 
 			reportCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 			defer cancel()

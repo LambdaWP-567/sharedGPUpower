@@ -1,0 +1,98 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: zitadel-config
+  namespace: sharedgpu
+data:
+  config.yaml: |
+    Log:
+      Level: info
+    Port: 8080
+    ExternalPort: 443
+    ExternalDomain: auth.sharedgpupower.example.com
+    ExternalSecure: true
+    TLS:
+      Enabled: false
+    Database:
+      postgres:
+        Host: postgres
+        Port: 5432
+        Database: zitadel
+        User: zitadel
+        Password: $ZITADEL_DB_PASS
+        SSL:
+          Mode: disable
+    DefaultInstance:
+      OIDCSettings:
+        AccessTokenLifetime: 12h
+        IdTokenLifetime: 12h
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zitadel
+  namespace: sharedgpu
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: zitadel
+  template:
+    metadata:
+      labels:
+        app: zitadel
+    spec:
+      initContainers:
+        - name: zitadel-init
+          image: ghcr.io/zitadel/zitadel:stable
+          args: ["init", "--config", "/config/config.yaml"]
+          envFrom:
+            - secretRef:
+                name: zitadel-secret
+          volumeMounts:
+            - name: config
+              mountPath: /config
+      containers:
+        - name: zitadel
+          image: ghcr.io/zitadel/zitadel:stable
+          args: ["start-from-init", "--masterkeyFromEnv", "--config", "/config/config.yaml"]
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - secretRef:
+                name: zitadel-secret
+          volumeMounts:
+            - name: config
+              mountPath: /config
+          readinessProbe:
+            httpGet:
+              path: /debug/ready
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 5
+      volumes:
+        - name: config
+          configMap:
+            name: zitadel-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: zitadel
+  namespace: sharedgpu
+spec:
+  selector:
+    app: zitadel
+  ports:
+    - port: 8081
+      targetPort: 8080
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: zitadel-secret
+  namespace: sharedgpu
+type: Opaque
+stringData:
+  ZITADEL_MASTERKEY: "CHANGE_ME_32_BYTE_MASTER_KEY_HERE"
+  ZITADEL_DB_PASS: "zitadel_password"

@@ -17,6 +17,18 @@ services:
       timeout: 5s
       retries: 5
 
+  postgres-init:
+    image: postgres:16-alpine
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: sharedgpu
+    entrypoint: >
+      sh -c "psql -h postgres -U sharedgpu -c \"CREATE DATABASE zitadel;\" 2>/dev/null || true &&
+             psql -h postgres -U sharedgpu -c \"CREATE USER zitadel WITH PASSWORD 'zitadel';\" 2>/dev/null || true &&
+             psql -h postgres -U sharedgpu -c \"GRANT ALL PRIVILEGES ON DATABASE zitadel TO zitadel;\" 2>/dev/null || true"
+
   redis:
     image: redis:7-alpine
     ports:
@@ -26,6 +38,52 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+
+  zitadel:
+    image: ghcr.io/zitadel/zitadel:stable
+    command: start-from-init --masterkey "CHANGE_ME_32_BYTE_KEY_FOR_LOCAL" --tlsMode disabled
+    environment:
+      ZITADEL_DATABASE_POSTGRES_HOST: postgres
+      ZITADEL_DATABASE_POSTGRES_PORT: "5432"
+      ZITADEL_DATABASE_POSTGRES_DATABASE: zitadel
+      ZITADEL_DATABASE_POSTGRES_USER_USERNAME: zitadel
+      ZITADEL_DATABASE_POSTGRES_USER_PASSWORD: zitadel
+      ZITADEL_DATABASE_POSTGRES_USER_SSL_MODE: disable
+      ZITADEL_DATABASE_POSTGRES_ADMIN_USERNAME: sharedgpu
+      ZITADEL_DATABASE_POSTGRES_ADMIN_PASSWORD: sharedgpu
+      ZITADEL_DATABASE_POSTGRES_ADMIN_SSL_MODE: disable
+      ZITADEL_EXTERNALSECURE: "false"
+      ZITADEL_EXTERNALPORT: "8081"
+      ZITADEL_EXTERNALDOMAIN: localhost
+    ports:
+      - "8081:8080"
+    depends_on:
+      postgres-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/debug/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  step-ca:
+    image: smallstep/step-ca:latest
+    ports:
+      - "9000:9000"
+    volumes:
+      - step_ca_data:/home/step
+    environment:
+      DOCKER_STEPCA_INIT_NAME: "sharedGPUpower CA"
+      DOCKER_STEPCA_INIT_DNS_NAMES: "localhost,step-ca"
+      DOCKER_STEPCA_INIT_REMOTE_MANAGEMENT: "true"
+      DOCKER_STEPCA_INIT_ACME: "false"
+    healthcheck:
+      test: ["CMD", "step", "ca", "health", "--ca-url", "https://localhost:9000", "--root", "/home/step/certs/root_ca.crt"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
 
   backend:
     build:
@@ -42,6 +100,11 @@ services:
       REDIS_ADDR: redis:6379
       HTTP_PORT: "8080"
       GRPC_PORT: "9090"
+      ZITADEL_DOMAIN: "zitadel:8080"
+      STEPCA_URL: "http://step-ca:9000"
+      STEPCA_PROVISIONER: "backend@sharedgpupower"
+      CORS_ORIGINS: "http://localhost:3000"
+      FRONTEND_URL: "http://localhost:3000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -59,3 +122,4 @@ services:
 
 volumes:
   postgres_data:
+  step_ca_data:

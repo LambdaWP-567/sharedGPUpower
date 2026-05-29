@@ -22,16 +22,16 @@ const (
 )
 
 type Job struct {
-	ID                string
-	SubmitterAgentID  string
-	AssignedAgentID   string
-	Type              string
-	Payload           map[string]any
-	Status            Status
-	TokenCost         float64
-	Error             string
-	CreatedAt         time.Time
-	CompletedAt       *time.Time
+	ID               string
+	SubmitterAgentID string
+	AssignedAgentID  string
+	Type             string
+	Payload          map[string]any
+	Status           Status
+	TokenCost        float64
+	Error            string
+	CreatedAt        time.Time
+	CompletedAt      *time.Time
 }
 
 type Store struct {
@@ -88,24 +88,31 @@ func (s *Store) Get(ctx context.Context, jobID string) (*Job, error) {
 	j := &Job{}
 	var payload []byte
 	var statusStr string
+	var completedAt *time.Time
+
 	err := s.db.QueryRow(ctx,
 		`SELECT id, submitter_agent_id, COALESCE(assigned_agent_id,''), type, payload, status,
-		        token_cost, COALESCE(error,''), created_at
+		        token_cost, COALESCE(error,''), created_at, completed_at
 		 FROM jobs WHERE id=$1`, jobID).
 		Scan(&j.ID, &j.SubmitterAgentID, &j.AssignedAgentID, &j.Type,
-			&payload, &statusStr, &j.TokenCost, &j.Error, &j.CreatedAt)
+			&payload, &statusStr, &j.TokenCost, &j.Error, &j.CreatedAt, &completedAt)
 	if err != nil {
 		return nil, fmt.Errorf("job not found: %w", err)
 	}
 	j.Status = Status(statusStr)
-	json.Unmarshal(payload, &j.Payload)
+	j.CompletedAt = completedAt
+
+	if err := json.Unmarshal(payload, &j.Payload); err != nil {
+		s.log.Warn("failed to unmarshal job payload", zap.String("job_id", jobID), zap.Error(err))
+		j.Payload = map[string]any{}
+	}
 	return j, nil
 }
 
 func (s *Store) ListBySubmitter(ctx context.Context, agentID string, limit int) ([]*Job, error) {
 	rows, err := s.db.Query(ctx,
 		`SELECT id, submitter_agent_id, COALESCE(assigned_agent_id,''), type, payload, status,
-		        token_cost, COALESCE(error,''), created_at
+		        token_cost, COALESCE(error,''), created_at, completed_at
 		 FROM jobs WHERE submitter_agent_id=$1 ORDER BY created_at DESC LIMIT $2`,
 		agentID, limit)
 	if err != nil {
@@ -118,13 +125,17 @@ func (s *Store) ListBySubmitter(ctx context.Context, agentID string, limit int) 
 		j := &Job{}
 		var payload []byte
 		var statusStr string
+		var completedAt *time.Time
 		if err := rows.Scan(&j.ID, &j.SubmitterAgentID, &j.AssignedAgentID, &j.Type,
-			&payload, &statusStr, &j.TokenCost, &j.Error, &j.CreatedAt); err != nil {
+			&payload, &statusStr, &j.TokenCost, &j.Error, &j.CreatedAt, &completedAt); err != nil {
 			return nil, err
 		}
 		j.Status = Status(statusStr)
-		json.Unmarshal(payload, &j.Payload)
+		j.CompletedAt = completedAt
+		if err := json.Unmarshal(payload, &j.Payload); err != nil {
+			j.Payload = map[string]any{}
+		}
 		out = append(out, j)
 	}
-	return out, nil
+	return out, rows.Err()
 }

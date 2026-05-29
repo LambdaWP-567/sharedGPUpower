@@ -58,16 +58,37 @@ func (hub *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// snapshot returns a copy of current clients under read lock.
+func (hub *Hub) snapshot() []*websocket.Conn {
+	hub.mu.RLock()
+	defer hub.mu.RUnlock()
+	conns := make([]*websocket.Conn, 0, len(hub.clients))
+	for conn := range hub.clients {
+		conns = append(conns, conn)
+	}
+	return conns
+}
+
+func (hub *Hub) remove(conn *websocket.Conn) {
+	hub.mu.Lock()
+	delete(hub.clients, conn)
+	hub.mu.Unlock()
+}
+
+// Broadcast sends an event to all connected WebSocket clients.
+// It copies the client list first so the lock is not held during writes.
 func (hub *Hub) Broadcast(event string, data any) {
 	msg, err := json.Marshal(map[string]any{"event": event, "data": data})
 	if err != nil {
 		return
 	}
-	hub.mu.RLock()
-	defer hub.mu.RUnlock()
-	for conn := range hub.clients {
+	for _, conn := range hub.snapshot() {
 		conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
-		conn.WriteMessage(websocket.TextMessage, msg)
+		if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+			hub.log.Debug("ws write failed, removing client", zap.Error(err))
+			hub.remove(conn)
+			conn.Close()
+		}
 	}
 }
 
@@ -76,12 +97,13 @@ func (hub *Hub) StartPing(interval time.Duration) {
 		t := time.NewTicker(interval)
 		defer t.Stop()
 		for range t.C {
-			hub.mu.RLock()
-			for conn := range hub.clients {
+			for _, conn := range hub.snapshot() {
 				conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
-				conn.WriteMessage(websocket.PingMessage, nil)
+				if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+					hub.remove(conn)
+					conn.Close()
+				}
 			}
-			hub.mu.RUnlock()
 		}
 	}()
 }

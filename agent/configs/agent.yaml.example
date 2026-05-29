@@ -15,3 +15,9 @@ ollama:
 
 agent:
   name: "my-mac-studio"   # human-readable name shown in dashboard
+
+auth:
+  user_api_key: "sgpu_your_key_here"   # from dashboard → Profile → API Key
+  cert_path: "~/.sharedgpu/agent.crt"
+  key_path:  "~/.sharedgpu/agent.key"
+  ca_cert_path: "~/.sharedgpu/ca.crt"

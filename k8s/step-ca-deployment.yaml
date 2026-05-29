@@ -1,0 +1,68 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: step-ca
+  namespace: sharedgpu
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: step-ca
+  template:
+    metadata:
+      labels:
+        app: step-ca
+    spec:
+      containers:
+        - name: step-ca
+          image: smallstep/step-ca:latest
+          ports:
+            - containerPort: 9000
+          env:
+            - name: DOCKER_STEPCA_INIT_NAME
+              value: "sharedGPUpower CA"
+            - name: DOCKER_STEPCA_INIT_DNS_NAMES
+              value: "step-ca,step-ca.sharedgpu.svc.cluster.local"
+            - name: DOCKER_STEPCA_INIT_REMOTE_MANAGEMENT
+              value: "true"
+            - name: DOCKER_STEPCA_INIT_ACME
+              value: "false"
+          volumeMounts:
+            - name: step-ca-data
+              mountPath: /home/step
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 9000
+              scheme: HTTPS
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 6
+      volumes:
+        - name: step-ca-data
+          persistentVolumeClaim:
+            claimName: step-ca-pvc
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: step-ca-pvc
+  namespace: sharedgpu
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: step-ca
+  namespace: sharedgpu
+spec:
+  selector:
+    app: step-ca
+  ports:
+    - port: 9000
+      targetPort: 9000

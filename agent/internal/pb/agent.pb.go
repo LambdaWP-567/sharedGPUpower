@@ -29,6 +29,8 @@ type RegisterRequest struct {
 	Hardware      *HardwareInfo          `protobuf:"bytes,3,opt,name=hardware,proto3" json:"hardware,omitempty"`
 	Limits        *ResourceLimits        `protobuf:"bytes,4,opt,name=limits,proto3" json:"limits,omitempty"`
 	Benchmark     *BenchmarkResult       `protobuf:"bytes,5,opt,name=benchmark,proto3" json:"benchmark,omitempty"`
+	UserApiKey    string                 `protobuf:"bytes,6,opt,name=user_api_key,json=userApiKey,proto3" json:"user_api_key,omitempty"`
+	CsrPem        []byte                 `protobuf:"bytes,7,opt,name=csr_pem,json=csrPem,proto3" json:"csr_pem,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -98,10 +100,26 @@ func (x *RegisterRequest) GetBenchmark() *BenchmarkResult {
 	return nil
 }
 
+func (x *RegisterRequest) GetUserApiKey() string {
+	if x != nil {
+		return x.UserApiKey
+	}
+	return ""
+}
+
+func (x *RegisterRequest) GetCsrPem() []byte {
+	if x != nil {
+		return x.CsrPem
+	}
+	return nil
+}
+
 type RegisterResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	AgentId       string                 `protobuf:"bytes,1,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
 	Token         string                 `protobuf:"bytes,2,opt,name=token,proto3" json:"token,omitempty"`
+	CertPem       []byte                 `protobuf:"bytes,3,opt,name=cert_pem,json=certPem,proto3" json:"cert_pem,omitempty"`
+	CaCertPem     []byte                 `protobuf:"bytes,4,opt,name=ca_cert_pem,json=caCertPem,proto3" json:"ca_cert_pem,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -148,6 +166,20 @@ func (x *RegisterResponse) GetToken() string {
 		return x.Token
 	}
 	return ""
+}
+
+func (x *RegisterResponse) GetCertPem() []byte {
+	if x != nil {
+		return x.CertPem
+	}
+	return nil
+}
+
+func (x *RegisterResponse) GetCaCertPem() []byte {
+	if x != nil {
+		return x.CaCertPem
+	}
+	return nil
 }
 
 type HardwareInfo struct {
@@ -734,17 +766,22 @@ var File_agent_proto protoreflect.FileDescriptor
 
 const file_agent_proto_rawDesc = "" +
 	"\n" +
-	"\vagent.proto\x12\x12sharedgpu.agent.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\x81\x02\n" +
+	"\vagent.proto\x12\x12sharedgpu.agent.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xbc\x02\n" +
 	"\x0fRegisterRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1d\n" +
 	"\n" +
 	"public_key\x18\x02 \x01(\tR\tpublicKey\x12<\n" +
 	"\bhardware\x18\x03 \x01(\v2 .sharedgpu.agent.v1.HardwareInfoR\bhardware\x12:\n" +
 	"\x06limits\x18\x04 \x01(\v2\".sharedgpu.agent.v1.ResourceLimitsR\x06limits\x12A\n" +
-	"\tbenchmark\x18\x05 \x01(\v2#.sharedgpu.agent.v1.BenchmarkResultR\tbenchmark\"C\n" +
+	"\tbenchmark\x18\x05 \x01(\v2#.sharedgpu.agent.v1.BenchmarkResultR\tbenchmark\x12 \n" +
+	"\fuser_api_key\x18\x06 \x01(\tR\n" +
+	"userApiKey\x12\x17\n" +
+	"\acsr_pem\x18\a \x01(\fR\x06csrPem\"~\n" +
 	"\x10RegisterResponse\x12\x19\n" +
 	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12\x14\n" +
-	"\x05token\x18\x02 \x01(\tR\x05token\"\xad\x01\n" +
+	"\x05token\x18\x02 \x01(\tR\x05token\x12\x19\n" +
+	"\bcert_pem\x18\x03 \x01(\fR\acertPem\x12\x1e\n" +
+	"\vca_cert_pem\x18\x04 \x01(\fR\tcaCertPem\"\xad\x01\n" +
 	"\fHardwareInfo\x12\x1b\n" +
 	"\tcpu_cores\x18\x01 \x01(\x05R\bcpuCores\x12\x15\n" +
 	"\x06ram_gb\x18\x02 \x01(\x02R\x05ramGb\x12\x1b\n" +

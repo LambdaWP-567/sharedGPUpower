@@ -14,22 +14,24 @@ import (
 	"go.uber.org/zap"
 )
 
+const minResourceFraction = 0.01
+
 type JobRequest struct {
-	JobID            string
-	SubmitterAgentID string
-	Type             string
-	Payload          map[string]any
+	JobID             string
+	SubmitterAgentID  string
+	Type              string
+	Payload           map[string]any
 	RequiredGPULayers int32
 }
 
 type Scheduler struct {
-	mu       sync.Mutex
-	queue    []*JobRequest
-	reg      *registry.Registry
-	store    *jobs.Store
-	ledger   *tokens.Ledger
-	log      *zap.Logger
-	notify   chan struct{}
+	mu     sync.Mutex
+	queue  []*JobRequest
+	reg    *registry.Registry
+	store  *jobs.Store
+	ledger *tokens.Ledger
+	log    *zap.Logger
+	notify chan struct{}
 }
 
 func New(reg *registry.Registry, store *jobs.Store, ledger *tokens.Ledger, log *zap.Logger) *Scheduler {
@@ -91,14 +93,20 @@ func (s *Scheduler) dispatch(ctx context.Context) {
 		return
 	}
 
-	payload, _ := json.Marshal(req.Payload)
+	payload, err := json.Marshal(req.Payload)
+	if err != nil {
+		s.log.Error("marshal payload failed", zap.Error(err))
+		s.store.Fail(ctx, req.JobID, "internal: payload marshal failed")
+		return
+	}
+
 	select {
 	case agent.JobCh <- payload:
 		s.log.Info("job dispatched",
 			zap.String("job_id", req.JobID),
 			zap.String("agent_id", agent.ID))
 	default:
-		s.log.Warn("agent job channel full, requeueing", zap.String("agent_id", agent.ID))
+		s.log.Warn("agent job channel full, failing job", zap.String("agent_id", agent.ID))
 		s.store.Fail(ctx, req.JobID, "agent channel full")
 	}
 }
@@ -113,13 +121,13 @@ func (s *Scheduler) selectAgent(req *JobRequest) *registry.Agent {
 	var candidates []*registry.Agent
 	for _, a := range available {
 		if a.ID == req.SubmitterAgentID {
-			continue // don't assign to submitter (avoid loops)
+			continue
 		}
 		if req.RequiredGPULayers > 0 && a.GPULayersLimit < req.RequiredGPULayers {
 			continue
 		}
 		if len(a.JobCh) >= cap(a.JobCh) {
-			continue // full
+			continue
 		}
 		candidates = append(candidates, a)
 	}
@@ -127,7 +135,6 @@ func (s *Scheduler) selectAgent(req *JobRequest) *registry.Agent {
 		return nil
 	}
 
-	// Sort by benchmark score descending
 	sort.Slice(candidates, func(i, j int) bool {
 		return candidates[i].BenchScore > candidates[j].BenchScore
 	})
@@ -142,8 +149,11 @@ func (s *Scheduler) CompleteJob(ctx context.Context, jobID, agentID string, dura
 
 	durationMin := durationSeconds / 60.0
 	resourceFraction := float64(agent.GPULayersLimit) / 32.0
-	if resourceFraction == 0 {
+	if resourceFraction < minResourceFraction {
 		resourceFraction = float64(agent.CPULimit) / 100.0
+	}
+	if resourceFraction < minResourceFraction {
+		resourceFraction = minResourceFraction
 	}
 
 	cost := tokens.CalcCost(agent.BenchScore, durationMin, resourceFraction)
@@ -152,4 +162,8 @@ func (s *Scheduler) CompleteJob(ctx context.Context, jobID, agentID string, dura
 		return err
 	}
 	return s.ledger.Credit(ctx, agentID, jobID, cost)
+}
+
+func (s *Scheduler) FailJob(ctx context.Context, jobID, errMsg string) error {
+	return s.store.Fail(ctx, jobID, errMsg)
 }

@@ -19,11 +19,15 @@ message RegisterRequest {
   HardwareInfo hardware = 3;
   ResourceLimits limits = 4;
   BenchmarkResult benchmark = 5;
+  string user_api_key = 6;
+  bytes csr_pem = 7;
 }
 
 message RegisterResponse {
   string agent_id = 1;
   string token = 2;
+  bytes cert_pem = 3;
+  bytes ca_cert_pem = 4;
 }
 
 message HardwareInfo {

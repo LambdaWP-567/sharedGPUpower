@@ -11,6 +11,7 @@ type Config struct {
 	Resources ResourceConfig  `yaml:"resources"`
 	Ollama    OllamaConfig    `yaml:"ollama"`
 	Agent     AgentConfig     `yaml:"agent"`
+	Auth      AuthConfig      `yaml:"auth"`
 }
 
 type BackendConfig struct {
@@ -36,6 +37,13 @@ type AgentConfig struct {
 	ID   string `yaml:"id"`
 }
 
+type AuthConfig struct {
+	UserAPIKey  string `yaml:"user_api_key"`
+	CertPath    string `yaml:"cert_path"`
+	KeyPath     string `yaml:"key_path"`
+	CACertPath  string `yaml:"ca_cert_path"`
+}
+
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -48,6 +56,15 @@ func Load(path string) (*Config, error) {
 	// Defaults
 	if cfg.Backend.Endpoint == "" {
 		cfg.Backend.Endpoint = "localhost:9090"
+	}
+	if cfg.Auth.CertPath == "" {
+		cfg.Auth.CertPath = os.ExpandEnv("$HOME/.sharedgpu/agent.crt")
+	}
+	if cfg.Auth.KeyPath == "" {
+		cfg.Auth.KeyPath = os.ExpandEnv("$HOME/.sharedgpu/agent.key")
+	}
+	if cfg.Auth.CACertPath == "" {
+		cfg.Auth.CACertPath = os.ExpandEnv("$HOME/.sharedgpu/ca.crt")
 	}
 	if cfg.Ollama.Host == "" {
 		cfg.Ollama.Host = "http://localhost:11434"
