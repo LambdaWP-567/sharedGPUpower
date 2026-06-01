@@ -1,0 +1,33 @@
+/* Match the dashboard's brand blue exactly */
+:root {
+  --md-primary-fg-color: #0ea5e9;
+  --md-primary-fg-color--light: #38bdf8;
+  --md-primary-fg-color--dark: #0284c7;
+  --md-accent-fg-color: #06b6d4;
+}
+
+/* Tighter code blocks */
+.md-typeset code {
+  font-size: 0.85em;
+}
+
+/* Card grid used on the home page */
+.grid.cards > ul {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 1rem;
+  padding: 0;
+  list-style: none;
+}
+
+.grid.cards > ul > li {
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 0.4rem;
+  padding: 1.2rem;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.grid.cards > ul > li:hover {
+  border-color: var(--md-primary-fg-color);
+  box-shadow: 0 0 0 2px var(--md-primary-fg-color--light);
+}
